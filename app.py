@@ -14,6 +14,12 @@ import os
 from werkzeug.utils import secure_filename
 from datetime import datetime
 import threading
+# Add these new imports at the top
+import requests
+from bs4 import BeautifulSoup
+from urllib.parse import urlparse
+import re
+import time
 
 # Initialize Flask and Database
 app = Flask(__name__)
@@ -83,6 +89,150 @@ def process_excel(filepath):
     except Exception as e:
         print(f"Error processing file: {e}")
         return []
+
+
+# Add this function to analyze website quality
+def analyze_website(url):
+    if not url or not url.startswith(('http://', 'https://')):
+        return {
+            'mobile_friendly': False,
+            'load_time': None,
+            'professional_look': False,
+            'issues': ['Invalid URL'],
+            'score': 0
+        }
+
+    try:
+        start_time = time.time()
+        headers = {
+            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
+        }
+        response = requests.get(url, headers=headers, timeout=10)
+        load_time = time.time() - start_time
+
+        soup = BeautifulSoup(response.text, 'html.parser')
+
+        # Check for mobile-friendliness
+        viewport = soup.find('meta', attrs={'name': 'viewport'})
+        mobile_friendly = bool(viewport)
+
+        # Check for professional look
+        professional_look = True
+        issues = []
+
+        # Check for common CMS/template indicators
+        generator = soup.find('meta', attrs={'name': 'generator'})
+        if generator:
+            issues.append(f"Uses {generator.get('content', 'unknown CMS')}")
+
+        # Check for common problematic keywords in HTML
+        html_text = str(soup).lower()
+        problematic_keywords = ['wix', 'weebly', 'template', 'outdated', 'under construction']
+        found_keywords = [kw for kw in problematic_keywords if kw in html_text]
+        if found_keywords:
+            issues.extend(found_keywords)
+            professional_look = False
+
+        # Check for very basic HTML (might indicate poor quality)
+        if len(soup.find_all()) < 50:
+            issues.append("Very basic HTML structure")
+            professional_look = False
+
+        # Calculate score (0-100)
+        score = 0
+        if mobile_friendly:
+            score += 40
+        if load_time < 3:
+            score += 30
+        if professional_look:
+            score += 30
+
+        return {
+            'mobile_friendly': mobile_friendly,
+            'load_time': round(load_time, 2),
+            'professional_look': professional_look,
+            'issues': issues if issues else ['No major issues found'],
+            'score': score
+        }
+
+    except Exception as e:
+        return {
+            'mobile_friendly': False,
+            'load_time': None,
+            'professional_look': False,
+            'issues': [f"Error analyzing: {str(e)}"],
+            'score': 0
+        }
+
+
+# Add this new route for website quality analysis
+@app.route('/analyze_websites', methods=['GET', 'POST'])
+def analyze_websites():
+    # Get filter parameters
+    filter_type = request.args.get('filter', 'all')
+
+    # Get all results with websites
+    query = SearchResult.query.filter(SearchResult.website.isnot(None))
+
+    # Apply filters
+    if filter_type == 'no_website':
+        query = SearchResult.query.filter(SearchResult.website.is_(None))
+    elif filter_type == 'bad_website':
+        # This will be handled after analysis
+        pass
+
+    results = query.all()
+
+    # Analyze websites
+    analyzed_results = []
+    for result in results:
+        analysis = {}
+        if result.website:
+            analysis = analyze_website(result.website)
+        else:
+            analysis = {
+                'mobile_friendly': False,
+                'load_time': None,
+                'professional_look': False,
+                'issues': ['No website'],
+                'score': 0
+            }
+
+        analyzed_results.append({
+            'id': result.id,
+            'title': result.title,
+            'website': result.website,
+            'analysis': analysis
+        })
+
+    # Apply bad website filter if selected
+    if filter_type == 'bad_website':
+        analyzed_results = [r for r in analyzed_results if r['analysis']['score'] < 50]
+
+    # Handle Excel export
+    if 'export' in request.args:
+        df = pd.DataFrame([{
+            'ID': r['id'],
+            'Title': r['title'],
+            'Website': r['website'],
+            'Mobile Friendly': 'Yes' if r['analysis']['mobile_friendly'] else 'No',
+            'Load Time (s)': r['analysis']['load_time'],
+            'Professional Look': 'Yes' if r['analysis']['professional_look'] else 'No',
+            'Issues': ', '.join(r['analysis']['issues']),
+            'Score': r['analysis']['score']
+        } for r in analyzed_results])
+
+        filename = f"website_analysis_{filter_type}.xlsx"
+        df.to_excel(filename, index=False)
+        return send_file(filename, as_attachment=True)
+
+    return render_template('analyze_websites.html',
+                           results=analyzed_results,
+                           filter_type=filter_type)
+
+
+# Add to your existing imports if not already present
+from io import BytesIO
 
 
 def search_social_media(business_name):
@@ -350,6 +500,130 @@ def delete_keyword(keyword_id):
     flash('Keyword and associated results deleted successfully!', 'success')
     return redirect(url_for('keywords'))
 
+
+# Add these new routes to your existing app.py
+
+@app.route('/searchalldata', methods=['GET', 'POST'])
+def search_all_data():
+    page = request.args.get('page', 1, type=int)
+    per_page = 10  # Items per page
+
+    # Get parameters from either form POST or URL GET
+    if request.method == 'POST':
+        search_query = request.form.get('search_query', '')
+        field = request.form.get('search_field', 'title')
+        sort_by = request.form.get('sort_by', 'id')
+        sort_order = request.form.get('sort_order', 'asc')
+    else:
+        search_query = request.args.get('search_query', '')
+        field = request.args.get('search_field', 'title')
+        sort_by = request.args.get('sort_by', 'id')
+        sort_order = request.args.get('sort_order', 'asc')
+
+
+    # Handle search form submission
+    if request.method == 'POST':
+        search_query = request.form.get('search_query', '')
+        field = request.form.get('search_field', 'title')
+
+        # Build query based on search field
+        if field == 'title':
+            query = SearchResult.query.filter(SearchResult.title.contains(search_query))
+        elif field == 'phone':
+            query = SearchResult.query.filter(SearchResult.phone.contains(search_query))
+        elif field == 'website':
+            query = SearchResult.query.filter(SearchResult.website.contains(search_query))
+        elif field == 'keyword':
+            query = SearchResult.query.join(Keyword).filter(Keyword.keyword.contains(search_query))
+        else:
+            query = SearchResult.query
+
+        # Handle bulk actions
+        if 'bulk_action' in request.form:
+            selected_ids = request.form.getlist('selected_ids')
+            if selected_ids:
+                if request.form['bulk_action'] == 'delete':
+                    SearchResult.query.filter(SearchResult.id.in_(selected_ids)).delete()
+                    db.session.commit()
+                    flash(f'{len(selected_ids)} records deleted successfully!', 'success')
+
+        # Handle sorting
+        sort_by = request.form.get('sort_by', 'id')
+        sort_order = request.form.get('sort_order', 'asc')
+
+        if sort_by and sort_order:
+            if sort_order == 'asc':
+                query = query.order_by(getattr(SearchResult, sort_by).asc())
+            else:
+                query = query.order_by(getattr(SearchResult, sort_by).desc())
+    else:
+        search_query = request.args.get('search_query', '')
+        field = request.args.get('search_field', 'title')
+        sort_by = request.args.get('sort_by', 'id')
+        sort_order = request.args.get('sort_order', 'asc')
+
+        if field == 'title':
+            query = SearchResult.query.filter(SearchResult.title.contains(search_query))
+        elif field == 'phone':
+            query = SearchResult.query.filter(SearchResult.phone.contains(search_query))
+        elif field == 'website':
+            query = SearchResult.query.filter(SearchResult.website.contains(search_query))
+        elif field == 'keyword':
+            query = SearchResult.query.join(Keyword).filter(Keyword.keyword.contains(search_query))
+        else:
+            query = SearchResult.query
+
+        if sort_by and sort_order:
+            if sort_order == 'asc':
+                query = query.order_by(getattr(SearchResult, sort_by).asc())
+            else:
+                query = query.order_by(getattr(SearchResult, sort_by).desc())
+
+    # Paginate the results
+    results = query.paginate(page=page, per_page=per_page, error_out=False)
+
+    return render_template(
+        'searchalldata.html',
+        results=results,
+        search_query=search_query,
+        search_field=field,
+        sort_by=sort_by,
+        sort_order=sort_order
+    )
+
+
+
+
+# Add this new route to your app.py
+@app.route('/quick_search', methods=['GET'])
+def quick_search():
+    search_query = request.args.get('q', '')  # Get search query from URL parameter
+    if not search_query:
+        return redirect(url_for('search_all_data'))
+
+    # Redirect to searchalldata page with search parameters
+    return redirect(url_for('search_all_data',
+                            search_query=search_query,
+                            search_field='title',  # Default search field
+                            sort_by='id',
+                            sort_order='asc'))
+
+
+@app.route('/update_result/<int:result_id>', methods=['POST'])
+def update_result(result_id):
+    result = SearchResult.query.get_or_404(result_id)
+
+    result.title = request.form.get('title', result.title)
+    result.website = request.form.get('website', result.website)
+    result.phone = request.form.get('phone', result.phone)
+    result.facebook = request.form.get('facebook', result.facebook)
+    result.instagram = request.form.get('instagram', result.instagram)
+    result.linkedin = request.form.get('linkedin', result.linkedin)
+    result.twitter = request.form.get('twitter', result.twitter)
+
+    db.session.commit()
+    flash('Record updated successfully!', 'success')
+    return redirect(request.referrer or url_for('search_all_data'))
 
 # Add these new routes to your existing app.py
 

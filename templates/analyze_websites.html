@@ -1,0 +1,126 @@
+{% extends "base.html" %}
+
+{% block content %}
+
+<div id="loading" class="text-center py-5">
+    <div class="spinner-border text-primary" role="status">
+        <span class="visually-hidden">Loading...</span>
+    </div>
+    <p class="mt-2">Analyzing websites, please wait...</p>
+</div>
+
+<div class="container">
+    <div class="card mb-4">
+        <div class="card-header bg-primary text-white">
+            <h4><i class="bi bi-globe"></i> Website Quality Analysis</h4>
+        </div>
+        <div class="card-body">
+            <div class="row mb-4">
+                <div class="col-md-12">
+                    <div class="btn-group" role="group">
+                        <a href="{{ url_for('analyze_websites', filter='all') }}" 
+                           class="btn btn-outline-primary {% if filter_type == 'all' %}active{% endif %}">
+                            All Websites
+                        </a>
+                        <a href="{{ url_for('analyze_websites', filter='no_website') }}" 
+                           class="btn btn-outline-primary {% if filter_type == 'no_website' %}active{% endif %}">
+                            No Website
+                        </a>
+                        <a href="{{ url_for('analyze_websites', filter='bad_website') }}" 
+                           class="btn btn-outline-primary {% if filter_type == 'bad_website' %}active{% endif %}">
+                            Bad Websites (Score < 50)
+                        </a>
+                        <a href="{{ url_for('analyze_websites', filter=filter_type, export='1') }}" 
+                           class="btn btn-success">
+                            <i class="bi bi-download"></i> Export to Excel
+                        </a>
+                    </div>
+                </div>
+            </div>
+
+            <div class="table-responsive">
+                <table class="table table-hover table-striped">
+                    <thead class="table-light">
+                        <tr>
+                            <th>ID</th>
+                            <th>Business</th>
+                            <th>Website</th>
+                            <th>Mobile Friendly</th>
+                            <th>Load Time</th>
+                            <th>Professional</th>
+                            <th>Issues</th>
+                            <th>Score</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for result in results %}
+                        <tr>
+                            <td>{{ result.id }}</td>
+                            <td>{{ result.title }}</td>
+                            <td>
+                                {% if result.website %}
+                                    <a href="{{ result.website }}" target="_blank">
+                                        {{ result.website|truncate(30, True) }}
+                                    </a>
+                                {% else %}
+                                    <span class="text-muted">No website</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if result.analysis.mobile_friendly %}
+                                    <span class="badge bg-success">Yes</span>
+                                {% else %}
+                                    <span class="badge bg-danger">No</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if result.analysis.load_time %}
+                                    {% if result.analysis.load_time < 3 %}
+                                        <span class="badge bg-success">{{ result.analysis.load_time }}s</span>
+                                    {% else %}
+                                        <span class="badge bg-warning text-dark">{{ result.analysis.load_time }}s</span>
+                                    {% endif %}
+                                {% else %}
+                                    <span class="text-muted">N/A</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if result.analysis.professional_look %}
+                                    <span class="badge bg-success">Yes</span>
+                                {% else %}
+                                    <span class="badge bg-danger">No</span>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% for issue in result.analysis.issues %}
+                                    <span class="badge bg-info text-dark mb-1">{{ issue }}</span><br>
+                                {% endfor %}
+                            </td>
+                            <td>
+                                <div class="progress" style="height: 20px;">
+                                    <div class="progress-bar 
+                                        {% if result.analysis.score >= 70 %}bg-success
+                                        {% elif result.analysis.score >= 40 %}bg-warning
+                                        {% else %}bg-danger{% endif %}" 
+                                        role="progressbar" 
+                                        style="width: {{ result.analysis.score }}%;" 
+                                        aria-valuenow="{{ result.analysis.score }}" 
+                                        aria-valuemin="0" 
+                                        aria-valuemax="100">
+                                        {{ result.analysis.score }}
+                                    </div>
+                                </div>
+                            </td>
+                        </tr>
+                        {% else %}
+                        <tr>
+                            <td colspan="8" class="text-center text-muted py-4">No results found</td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
