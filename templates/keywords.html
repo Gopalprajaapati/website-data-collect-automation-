@@ -10,15 +10,15 @@
     </div>
     <div class="card-body">
         <!-- Bulk Actions Form -->
-        <form method="POST" action="{{ url_for('delete_keywords') }}" id="bulkActionsForm" class="mb-3">
+        <form method="POST" id="bulkActionsForm" class="mb-3">
             <div class="d-flex">
                 <button type="button" class="btn btn-outline-secondary btn-sm me-2" onclick="toggleSelectAll()">
                     <i class="bi bi-check-all"></i> Select All
                 </button>
-                <button type="submit" formaction="{{ url_for('run_keywords') }}" class="btn btn-success btn-sm me-2">
+                <button type="submit" formaction="{{ url_for('run_keywords') }}" class="btn btn-success btn-sm me-2" onclick="return validateRunSelection()">
                     <i class="bi bi-play-fill"></i> Run Selected
                 </button>
-                <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Are you sure you want to delete selected keywords and all their results?')">
+                <button type="submit" formaction="{{ url_for('delete_keywords') }}" class="btn btn-danger btn-sm" onclick="return confirm('Are you sure you want to delete selected keywords and all their results?')">
                     <i class="bi bi-trash-fill"></i> Delete Selected
                 </button>
             </div>
@@ -35,6 +35,7 @@
                             <th>Status</th>
                             <th>Created At</th>
                             <th>Completed At</th>
+                            <th>Results</th>
                             <th>Actions</th>
                         </tr>
                     </thead>
@@ -43,6 +44,9 @@
                         <tr>
                             <td>
                                 <input type="checkbox" name="keyword_ids" value="{{ keyword.id }}" class="row-checkbox">
+                                {% if keyword.status != 'pending' %}
+                                <input type="hidden" name="keyword_ids" value="{{ keyword.id }}" disabled>
+                                {% endif %}
                             </td>
                             <td>{{ keyword.id }}</td>
                             <td>{{ keyword.keyword }}</td>
@@ -55,6 +59,13 @@
                             <td>
                                 {% if keyword.completed_at %}
                                     {{ keyword.completed_at.strftime('%Y-%m-%d %H:%M') }}
+                                {% else %}
+                                    -
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if keyword.status == 'completed' %}
+                                    {{ keyword.results|length }}
                                 {% else %}
                                     -
                                 {% endif %}
@@ -81,7 +92,7 @@
                         </tr>
                         {% else %}
                         <tr>
-                            <td colspan="7" class="text-center text-muted">No keywords found. Add some to get started.</td>
+                            <td colspan="8" class="text-center text-muted">No keywords found. Add some to get started.</td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -95,11 +106,26 @@
     // Function to toggle select all checkboxes
     function toggleSelectAll() {
         const selectAll = document.getElementById('selectAllCheckbox');
-        const checkboxes = document.getElementsByClassName('row-checkbox');
+        const checkboxes = document.querySelectorAll('.row-checkbox');
 
         for (let checkbox of checkboxes) {
             checkbox.checked = selectAll.checked;
         }
+    }
+
+    // Validate that at least one pending keyword is selected for running
+    function validateRunSelection() {
+        const selected = document.querySelectorAll('.row-checkbox:checked');
+        const hasPending = Array.from(selected).some(checkbox => {
+            const row = checkbox.closest('tr');
+            return row.querySelector('.status-badge').textContent.trim() === 'Pending';
+        });
+
+        if (!hasPending) {
+            alert('Please select at least one pending keyword to run');
+            return false;
+        }
+        return true;
     }
 </script>
 {% endblock %}
