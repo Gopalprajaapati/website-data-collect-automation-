@@ -67,8 +67,18 @@ def allowed_file(filename):
 
 def process_excel(filepath):
     try:
-        df = pd.read_excel(filepath)
-        keywords = df.iloc[:, 0].dropna().unique().tolist()
+        # Read file based on extension
+        if filepath.endswith('.csv'):
+            df = pd.read_csv(filepath)
+        else:  # .xlsx or .xls
+            df = pd.read_excel(filepath)
+
+        # Get first column and clean data
+        keywords = df.iloc[:, 0].astype(str).str.strip().dropna().unique().tolist()
+
+        # Remove empty strings after stripping
+        keywords = [kw for kw in keywords if kw]
+
         return keywords
     except Exception as e:
         print(f"Error processing file: {e}")
@@ -270,19 +280,48 @@ def upload_file():
         filepath = os.path.join(app.config['UPLOAD_FOLDER'], filename)
         file.save(filepath)
 
-        keywords = process_excel(filepath)
-        added = 0
-        for kw in keywords:
-            if not Keyword.query.filter_by(keyword=kw).first():
-                db.session.add(Keyword(keyword=kw))
-                added += 1
+        try:
+            # Process Excel file
+            keywords = process_excel(filepath)
 
-        db.session.commit()
-        flash(f'{added} keywords imported successfully!', 'success')
-        return redirect(url_for('keywords'))
+            # Remove duplicates while preserving order
+            seen = set()
+            unique_keywords = []
+            for kw in keywords:
+                if kw not in seen:
+                    seen.add(kw)
+                    unique_keywords.append(kw)
+
+            # Count duplicates removed
+            duplicates_removed = len(keywords) - len(unique_keywords)
+
+            # Add only new keywords that don't exist in database
+            added = 0
+            for kw in unique_keywords:
+                if not Keyword.query.filter_by(keyword=kw).first():
+                    db.session.add(Keyword(keyword=kw))
+                    added += 1
+
+            db.session.commit()
+
+            # Prepare feedback message
+            message = f'{added} new keywords imported successfully!'
+            if duplicates_removed > 0:
+                message += f' {duplicates_removed} duplicates removed from file.'
+            if len(unique_keywords) - added > 0:
+                message += f' {len(unique_keywords) - added} duplicates already in database.'
+
+            flash(message, 'success')
+            return redirect(url_for('keywords'))
+
+        except Exception as e:
+            db.session.rollback()
+            flash(f'Error processing file: {str(e)}', 'error')
+            return redirect(url_for('index'))
     else:
         flash('Allowed file types are xlsx, xls, csv', 'error')
         return redirect(url_for('index'))
+
 
 
 @app.route('/scrape/<int:keyword_id>', methods=['POST'])
@@ -312,6 +351,53 @@ def delete_keyword(keyword_id):
     return redirect(url_for('keywords'))
 
 
+# Add these new routes to your existing app.py
+
+@app.route('/delete_keywords', methods=['POST'])
+def delete_keywords():
+    if request.method == 'POST':
+        keyword_ids = request.form.getlist('keyword_ids')
+
+        if not keyword_ids:
+            flash('No keywords selected for deletion', 'warning')
+            return redirect(url_for('keywords'))
+
+        try:
+            # Delete selected keywords and their results
+            for keyword_id in keyword_ids:
+                SearchResult.query.filter_by(keyword_id=keyword_id).delete()
+                Keyword.query.filter_by(id=keyword_id).delete()
+            db.session.commit()
+            flash(f'{len(keyword_ids)} keywords deleted successfully!', 'success')
+        except Exception as e:
+            db.session.rollback()
+            flash(f'Error deleting keywords: {str(e)}', 'error')
+
+        return redirect(url_for('keywords'))
+
+
+@app.route('/run_keywords', methods=['POST'])
+def run_keywords():
+    if request.method == 'POST':
+        keyword_ids = request.form.getlist('keyword_ids')
+
+        if not keyword_ids:
+            flash('No keywords selected to run', 'warning')
+            return redirect(url_for('keywords'))
+
+        try:
+            for keyword_id in keyword_ids:
+                # Start scraping in background thread for each keyword
+                thread = threading.Thread(target=run_scraper, args=(keyword_id,))
+                thread.start()
+
+            flash(f'Started scraping for {len(keyword_ids)} keywords in background', 'info')
+        except Exception as e:
+            flash(f'Error starting keywords: {str(e)}', 'error')
+
+        return redirect(url_for('keywords'))
+
+
 @app.route('/delete_result/<int:result_id>', methods=['POST'])
 def delete_result(result_id):
     result = SearchResult.query.get_or_404(result_id)
@@ -320,6 +406,28 @@ def delete_result(result_id):
     db.session.commit()
     flash('Result deleted successfully!', 'success')
     return redirect(url_for('results', keyword_id=keyword_id))
+
+
+@app.route('/delete_results', methods=['POST'])
+def delete_results():
+    if request.method == 'POST':
+        result_ids = request.form.getlist('result_ids')
+        keyword_id = request.form.get('keyword_id')
+
+        if not result_ids:
+            flash('No results selected for deletion', 'warning')
+            return redirect(url_for('results', keyword_id=keyword_id))
+
+        try:
+            # Delete selected results
+            SearchResult.query.filter(SearchResult.id.in_(result_ids)).delete()
+            db.session.commit()
+            flash(f'{len(result_ids)} results deleted successfully!', 'success')
+        except Exception as e:
+            db.session.rollback()
+            flash(f'Error deleting results: {str(e)}', 'error')
+
+        return redirect(url_for('results', keyword_id=keyword_id))
 
 
 @app.route('/export/<int:keyword_id>', methods=['GET'])

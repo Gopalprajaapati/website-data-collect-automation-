@@ -36,86 +36,105 @@
         </div>
         {% endif %}
 
-        {% if results %}
-        <div class="table-responsive">
-            <table class="table table-hover table-striped">
-                <thead class="table-light">
-                    <tr>
-                        <th>#</th>
-                        <th>Title</th>
-                        <th>Website</th>
-                        <th>Rating</th>
-                        <th>Phone</th>
-                        <th>Social Media</th>
-                        <th>Scraped At</th>
-                        <th>Actions</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for result in results %}
-                    <tr>
-                        <td>{{ loop.index }}</td>
-                        <td>
-                            {% if result.link %}
-                                <a href="{{ result.link }}" target="_blank">{{ result.title|truncate(30) }}</a>
-                            {% else %}
-                                {{ result.title|truncate(30) }}
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if result.website %}
-                                <a href="{{ result.website }}" target="_blank" title="{{ result.website }}">
-                                    {{ (result.website|replace('https://','')|replace('http://','')|truncate(20, True)) }}
-                                </a>
-                            {% endif %}
-                        </td>
-                        <td>
-                            {% if result.stars %}
-                                <span class="badge bg-warning text-dark">
-                                    <i class="bi bi-star-fill"></i> {{ result.stars }}
-                                    {% if result.reviews %}
-                                        ({{ result.reviews }} reviews)
-                                    {% endif %}
-                                </span>
-                            {% endif %}
-                        </td>
-                        <td>{{ result.phone }}</td>
-                        <td>
-                            {% if result.facebook %}
-                                <a href="{{ result.facebook }}" target="_blank" class="social-icon facebook" data-bs-toggle="tooltip" title="Facebook">
-                                    <i class="bi bi-facebook"></i>
-                                </a>
-                            {% endif %}
-                            {% if result.instagram %}
-                                <a href="{{ result.instagram }}" target="_blank" class="social-icon instagram" data-bs-toggle="tooltip" title="Instagram">
-                                    <i class="bi bi-instagram"></i>
-                                </a>
-                            {% endif %}
-                            {% if result.twitter %}
-                                <a href="{{ result.twitter }}" target="_blank" class="social-icon twitter" data-bs-toggle="tooltip" title="Twitter">
-                                    <i class="bi bi-twitter"></i>
-                                </a>
-                            {% endif %}
-                            {% if result.linkedin %}
-                                <a href="{{ result.linkedin }}" target="_blank" class="social-icon linkedin" data-bs-toggle="tooltip" title="LinkedIn">
-                                    <i class="bi bi-linkedin"></i>
-                                </a>
-                            {% endif %}
-                        </td>
-                        <td>{{ result.scraped_at.strftime('%Y-%m-%d %H:%M') }}</td>
-                        <td>
-                            <form method="POST" action="{{ url_for('delete_result', result_id=result.id) }}" class="d-inline">
-                                <button type="submit" class="btn btn-sm btn-danger action-btn" data-bs-toggle="tooltip" title="Delete" onclick="return confirm('Are you sure?')">
-                                    <i class="bi bi-trash-fill"></i>
-                                </button>
-                            </form>
-                        </td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-        {% else %}
+        <!-- Bulk Actions Form -->
+        <form method="POST" action="{{ url_for('delete_results') }}" id="bulkActionsForm">
+            <input type="hidden" name="keyword_id" value="{{ keyword.id }}">
+            <div class="d-flex mb-3">
+                <button type="button" class="btn btn-outline-secondary btn-sm me-2" onclick="toggleSelectAll()">
+                    <i class="bi bi-check-all"></i> Select All
+                </button>
+                <button type="submit" class="btn btn-danger btn-sm" onclick="return confirm('Are you sure you want to delete selected results?')">
+                    <i class="bi bi-trash-fill"></i> Delete Selected
+                </button>
+            </div>
+
+            <div class="table-responsive">
+                <table class="table table-hover table-striped">
+                    <thead class="table-light">
+                        <tr>
+                            <th width="40px">
+                                <input type="checkbox" id="selectAllCheckbox" onclick="toggleSelectAll()">
+                            </th>
+                            <th>#</th>
+                            <th>Title</th>
+                            <th>Website</th>
+                            <th>Rating</th>
+                            <th>Phone</th>
+                            <th>Social Media</th>
+                            <th>Scraped At</th>
+                            <th>Actions</th>
+                        </tr>
+                    </thead>
+                    <tbody>
+                        {% for result in results %}
+                        <tr>
+                            <td>
+                                <input type="checkbox" name="result_ids" value="{{ result.id }}" class="row-checkbox">
+                            </td>
+                            <td>{{ loop.index }}</td>
+                            <td>
+                                {% if result.link %}
+                                    <a href="{{ result.link }}" target="_blank">{{ result.title|truncate(30) }}</a>
+                                {% else %}
+                                    {{ result.title|truncate(30) }}
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if result.website %}
+                                    <a href="{{ result.website }}" target="_blank" title="{{ result.website }}">
+                                        {{ (result.website|replace('https://','')|replace('http://','')|truncate(20, True)) }}
+                                    </a>
+                                {% endif %}
+                            </td>
+                            <td>
+                                {% if result.stars %}
+                                    <span class="badge bg-warning text-dark">
+                                        <i class="bi bi-star-fill"></i> {{ result.stars }}
+                                        {% if result.reviews %}
+                                            ({{ result.reviews }} reviews)
+                                        {% endif %}
+                                    </span>
+                                {% endif %}
+                            </td>
+                            <td>{{ result.phone }}</td>
+                            <td>
+                                {% if result.facebook %}
+                                    <a href="{{ result.facebook }}" target="_blank" class="social-icon facebook" data-bs-toggle="tooltip" title="Facebook">
+                                        <i class="bi bi-facebook"></i>
+                                    </a>
+                                {% endif %}
+                                {% if result.instagram %}
+                                    <a href="{{ result.instagram }}" target="_blank" class="social-icon instagram" data-bs-toggle="tooltip" title="Instagram">
+                                        <i class="bi bi-instagram"></i>
+                                    </a>
+                                {% endif %}
+                                {% if result.twitter %}
+                                    <a href="{{ result.twitter }}" target="_blank" class="social-icon twitter" data-bs-toggle="tooltip" title="Twitter">
+                                        <i class="bi bi-twitter"></i>
+                                    </a>
+                                {% endif %}
+                                {% if result.linkedin %}
+                                    <a href="{{ result.linkedin }}" target="_blank" class="social-icon linkedin" data-bs-toggle="tooltip" title="LinkedIn">
+                                        <i class="bi bi-linkedin"></i>
+                                    </a>
+                                {% endif %}
+                            </td>
+                            <td>{{ result.scraped_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                            <td>
+                                <form method="POST" action="{{ url_for('delete_result', result_id=result.id) }}" class="d-inline">
+                                    <button type="submit" class="btn btn-sm btn-danger action-btn" data-bs-toggle="tooltip" title="Delete" onclick="return confirm('Are you sure?')">
+                                        <i class="bi bi-trash-fill"></i>
+                                    </button>
+                                </form>
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    </tbody>
+                </table>
+            </div>
+        </form>
+
+        {% if not results %}
         <div class="alert alert-info">
             <i class="bi bi-info-circle"></i>
             {% if keyword.status == 'pending' %}
@@ -130,12 +149,22 @@
     </div>
 </div>
 
-{% if keyword.status == 'in_progress' %}
 <script>
+    // Function to toggle select all checkboxes
+    function toggleSelectAll() {
+        const selectAll = document.getElementById('selectAllCheckbox');
+        const checkboxes = document.getElementsByClassName('row-checkbox');
+
+        for (let checkbox of checkboxes) {
+            checkbox.checked = selectAll.checked;
+        }
+    }
+
     // Auto-refresh the page every 10 seconds if scraping is in progress
+    {% if keyword.status == 'in_progress' %}
     setTimeout(function(){
         window.location.reload();
     }, 10000);
+    {% endif %}
 </script>
-{% endif %}
 {% endblock %}
