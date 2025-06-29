@@ -1,0 +1,93 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="card">
+    <div class="card-header bg-primary text-white">
+        <h4><i class="bi bi-search"></i> Business Information Scraper</h4>
+    </div>
+    <div class="card-body">
+        <form method="POST" class="mb-4">
+            <div class="row g-3">
+                <div class="col-md-8">
+                    <input type="text" name="keyword" class="form-control" placeholder="Enter keyword (e.g., 'restaurants in new york')" required>
+                </div>
+                <div class="col-md-4">
+                    <button type="submit" class="btn btn-primary w-100">
+                        <i class="bi bi-plus-circle"></i> Add Keyword
+                    </button>
+                </div>
+            </div>
+        </form>
+        
+        <form method="POST" action="{{ url_for('upload_file') }}" enctype="multipart/form-data" class="mb-4">
+            <div class="row g-3">
+                <div class="col-md-8">
+                    <input type="file" name="file" class="form-control" accept=".xlsx,.xls,.csv" required>
+                    <small class="text-muted">Upload Excel file with keywords (first column will be read)</small>
+                </div>
+                <div class="col-md-4">
+                    <button type="submit" class="btn btn-success w-100">
+                        <i class="bi bi-upload"></i> Upload Excel
+                    </button>
+                </div>
+            </div>
+        </form>
+        
+        <div class="d-flex justify-content-between align-items-center mb-3">
+            <h5><i class="bi bi-list-ul"></i> Keywords List</h5>
+            <a href="{{ url_for('keywords') }}" class="btn btn-sm btn-outline-primary">
+                <i class="bi bi-arrow-right"></i> View All
+            </a>
+        </div>
+        
+        <div class="table-responsive">
+            <table class="table table-hover">
+                <thead class="table-light">
+                    <tr>
+                        <th>#</th>
+                        <th>Keyword</th>
+                        <th>Status</th>
+                        <th>Actions</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for keyword in keywords[:5] %}
+                    <tr>
+                        <td>{{ keyword.id }}</td>
+                        <td>{{ keyword.keyword }}</td>
+                        <td>
+                            <span class="status-badge status-{{ keyword.status }}">
+                                {{ keyword.status|capitalize }}
+                            </span>
+                        </td>
+                        <td>
+                            {% if keyword.status == 'pending' %}
+                                <form method="POST" action="{{ url_for('scrape_keyword', keyword_id=keyword.id) }}" class="d-inline">
+                                    <button type="submit" class="btn btn-sm btn-success action-btn" data-bs-toggle="tooltip" title="Scrape">
+                                        <i class="bi bi-play-fill"></i>
+                                    </button>
+                                </form>
+                            {% endif %}
+                            
+                            <a href="{{ url_for('results', keyword_id=keyword.id) }}" class="btn btn-sm btn-primary action-btn" data-bs-toggle="tooltip" title="View Results">
+                                <i class="bi bi-eye-fill"></i>
+                            </a>
+                            
+                            <form method="POST" action="{{ url_for('delete_keyword', keyword_id=keyword.id) }}" class="d-inline">
+                                <button type="submit" class="btn btn-sm btn-danger action-btn" data-bs-toggle="tooltip" title="Delete" onclick="return confirm('Are you sure?')">
+                                    <i class="bi bi-trash-fill"></i>
+                                </button>
+                            </form>
+                        </td>
+                    </tr>
+                    {% else %}
+                    <tr>
+                        <td colspan="4" class="text-center text-muted">No keywords found. Add some to get started.</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}
