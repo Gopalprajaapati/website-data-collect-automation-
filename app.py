@@ -12,7 +12,7 @@ from googlesearch import search
 from urllib.parse import urlparse
 import os
 from werkzeug.utils import secure_filename
-from datetime import datetime
+from datetime import datetime, timedelta
 import threading
 # Add these new imports at the top
 import requests
@@ -20,11 +20,22 @@ from bs4 import BeautifulSoup
 from urllib.parse import urlparse
 import re
 import time
+from celery import Celery
+
 
 # Initialize Flask and Database
 app = Flask(__name__)
-app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///resultss.db'
+app.config['SQLALCHEMY_DATABASE_URI'] = 'sqlite:///resultss.db?check_same_thread=False&timeout=30'
 app.config['SQLALCHEMY_TRACK_MODIFICATIONS'] = False
+# Add this to your app.py
+app.config['SQLALCHEMY_ENGINE_OPTIONS'] = {
+    'pool_pre_ping': True,
+    'pool_recycle': 3600,
+    'pool_timeout': 30,
+    'max_overflow': 20
+}
+
+
 app.config['UPLOAD_FOLDER'] = 'uploads'
 app.secret_key = 'your-secret-key-here'
 
@@ -33,15 +44,58 @@ db = SQLAlchemy(app)
 # Ensure upload folder exists
 os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
 
+# Install Celery
+# pip install celery
+
+# celery_worker.py
+
+
+def make_celery(app):
+    celery = Celery(
+        app.import_name,
+        backend=app.config['CELERY_RESULT_BACKEND'],
+        broker=app.config['CELERY_BROKER_URL']
+    )
+    celery.conf.update(app.config)
+    return celery
+
+# In app.py
+app.config.update(
+    CELERY_BROKER_URL='redis://localhost:6379/0',
+    CELERY_RESULT_BACKEND='redis://localhost:6379/0'
+)
+celery = make_celery(app)
+
+@celery.task(bind=True)
+def run_scraper_task(self, keyword_id):
+    # Your scraping logic here
+    return {'status': 'completed', 'result_count': len(results)}
+
+
 
 # Define database models
+
+# Add this new model to your existing models
+class WebsiteAnalysis(db.Model):
+    id = db.Column(db.Integer, primary_key=True)
+    result_id = db.Column(db.Integer, db.ForeignKey('search_result.id'), nullable=False)
+    mobile_friendly = db.Column(db.Boolean)
+    load_time = db.Column(db.Float)
+    professional_look = db.Column(db.Boolean)
+    issues = db.Column(db.String(500))
+    score = db.Column(db.Integer)
+    last_analyzed = db.Column(db.DateTime)  # Make sure this line exists
+
+    result = db.relationship('SearchResult', backref='analysis')
+
+
 class Keyword(db.Model):
     id = db.Column(db.Integer, primary_key=True)
     keyword = db.Column(db.String(200), nullable=False)
     status = db.Column(db.String(20), default='pending')  # pending, in_progress, completed
     created_at = db.Column(db.DateTime, default=datetime.utcnow)
     completed_at = db.Column(db.DateTime, nullable=True)
-
+    last_analyzed = db.Column(db.DateTime)
 
 class SearchResult(db.Model):
     id = db.Column(db.Integer, primary_key=True)
@@ -91,7 +145,42 @@ def process_excel(filepath):
         return []
 
 
+def analyze_and_save_website(result_id, url):
+    # Check if recent analysis exists (within 7 days)
+    existing = WebsiteAnalysis.query.filter(
+        WebsiteAnalysis.result_id == result_id,
+        WebsiteAnalysis.last_analyzed >= datetime.utcnow() - timedelta(days=7)
+    ).first()
+
+    if existing:
+        return {
+            'mobile_friendly': existing.mobile_friendly,
+            'load_time': existing.load_time,
+            'professional_look': existing.professional_look,
+            'issues': existing.issues.split('|') if existing.issues else [],
+            'score': existing.score,
+            'cached': True
+        }
+
+    analysis_data = analyze_website(url)  # Your existing function
+
+    # Save to database
+    new_analysis = WebsiteAnalysis(
+        result_id=result_id,
+        mobile_friendly=analysis_data['mobile_friendly'],
+        load_time=analysis_data['load_time'],
+        professional_look=analysis_data['professional_look'],
+        issues='|'.join(analysis_data['issues']),
+        score=analysis_data['score']
+    )
+    db.session.add(new_analysis)
+    db.session.commit()
+
+    analysis_data['cached'] = False
+    return analysis_data
+
 # Add this function to analyze website quality
+# Improved analyze_website function
 def analyze_website(url):
     if not url or not url.startswith(('http://', 'https://')):
         return {
@@ -107,38 +196,69 @@ def analyze_website(url):
         headers = {
             'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/91.0.4472.124 Safari/537.36'
         }
+
+        # First request to get load time
         response = requests.get(url, headers=headers, timeout=10)
         load_time = time.time() - start_time
 
+        # Check for redirects
+        if response.history:
+            final_url = response.url
+            if final_url != url:
+                return {
+                    'mobile_friendly': False,
+                    'load_time': load_time,
+                    'professional_look': False,
+                    'issues': [f'Redirects to {final_url}'],
+                    'score': 20
+                }
+
         soup = BeautifulSoup(response.text, 'html.parser')
 
-        # Check for mobile-friendliness
+        # Mobile friendly check
         viewport = soup.find('meta', attrs={'name': 'viewport'})
         mobile_friendly = bool(viewport)
 
-        # Check for professional look
-        professional_look = True
+        # Professional look checks
         issues = []
+        professional_look = True
 
-        # Check for common CMS/template indicators
+        # Check for common CMS/templates
         generator = soup.find('meta', attrs={'name': 'generator'})
         if generator:
             issues.append(f"Uses {generator.get('content', 'unknown CMS')}")
 
-        # Check for common problematic keywords in HTML
-        html_text = str(soup).lower()
-        problematic_keywords = ['wix', 'weebly', 'template', 'outdated', 'under construction']
-        found_keywords = [kw for kw in problematic_keywords if kw in html_text]
-        if found_keywords:
-            issues.extend(found_keywords)
-            professional_look = False
-
-        # Check for very basic HTML (might indicate poor quality)
+        # Check HTML structure
         if len(soup.find_all()) < 50:
-            issues.append("Very basic HTML structure")
+            issues.append("Basic HTML structure (low complexity)")
             professional_look = False
 
-        # Calculate score (0-100)
+        # Check for problematic keywords
+        html_text = str(soup).lower()
+        problematic_terms = {
+            'wix': 'Wix website builder detected',
+            'weebly': 'Weebly website builder detected',
+            'template': 'Template detected',
+            'under construction': 'Site appears to be under construction',
+            'coming soon': 'Site appears to be coming soon',
+            'outdated': 'Outdated design elements detected'
+        }
+
+        for term, message in problematic_terms.items():
+            if term in html_text:
+                issues.append(message)
+                professional_look = False
+
+        # Check for broken images
+        broken_images = 0
+        for img in soup.find_all('img'):
+            if not img.get('src') or 'data:image' not in img.get('src', ''):
+                broken_images += 1
+        if broken_images > 3:
+            issues.append(f"{broken_images} potentially broken images")
+            professional_look = False
+
+        # Calculate score
         score = 0
         if mobile_friendly:
             score += 40
@@ -155,81 +275,293 @@ def analyze_website(url):
             'score': score
         }
 
+    except requests.exceptions.RequestException as e:
+        return {
+            'mobile_friendly': False,
+            'load_time': None,
+            'professional_look': False,
+            'issues': [f"Connection error: {str(e)}"],
+            'score': 0
+        }
     except Exception as e:
         return {
             'mobile_friendly': False,
             'load_time': None,
             'professional_look': False,
-            'issues': [f"Error analyzing: {str(e)}"],
+            'issues': [f"Analysis error: {str(e)}"],
             'score': 0
         }
+
+
+# Add these new routes
+@app.route('/website_analysis', methods=['GET'])
+def website_analysis():
+    # Get filter parameters
+    filter_type = request.args.get('filter', 'all')
+    search_query = request.args.get('search', '')
+    per_page = request.args.get('per_page', 10, type=int)
+    page = request.args.get('page', 1, type=int)
+
+    # Base query
+    query = db.session.query(SearchResult, WebsiteAnalysis).outerjoin(
+        WebsiteAnalysis, SearchResult.id == WebsiteAnalysis.result_id)
+
+    # Apply search filter
+    if search_query:
+        query = query.filter(
+            SearchResult.title.ilike(f'%{search_query}%') |
+            SearchResult.website.ilike(f'%{search_query}%')
+        )
+
+    # Apply filters
+    if filter_type == 'no_website':
+        query = query.filter(SearchResult.website.is_(None))
+    elif filter_type == 'bad_website':
+        query = query.filter(WebsiteAnalysis.score < 50)
+    elif filter_type == 'good_website':
+        query = query.filter(WebsiteAnalysis.score >= 70)
+
+    # Apply sorting (new)
+    sort_by = request.args.get('sort_by', 'last_analyzed')
+    sort_order = request.args.get('sort_order', 'desc')
+
+    if sort_by == 'score':
+        if sort_order == 'asc':
+            query = query.order_by(WebsiteAnalysis.score.asc())
+        else:
+            query = query.order_by(WebsiteAnalysis.score.desc())
+    else:  # Default sort by last analyzed
+        if sort_order == 'asc':
+            query = query.order_by(WebsiteAnalysis.last_analyzed.asc())
+        else:
+            query = query.order_by(WebsiteAnalysis.last_analyzed.desc())
+
+    # Paginate the results
+    results = query.paginate(page=page, per_page=per_page, error_out=False)
+
+    return render_template('website_analysis.html',
+                           results=results,
+                           filter_type=filter_type,
+                           search_query=search_query,
+                           sort_by=sort_by,
+                           sort_order=sort_order)
+
+
+
+@app.route('/run_analysis', methods=['POST'])
+def run_analysis():
+    result_ids = request.form.getlist('result_ids')
+    force_reanalyze = 'force_reanalyze' in request.form
+
+    for result_id in result_ids:
+        result = SearchResult.query.get(result_id)
+
+        # Skip if already analyzed and not forcing reanalysis
+        existing = WebsiteAnalysis.query.filter_by(result_id=result_id).first()
+        if existing and not force_reanalyze:
+            continue
+
+        if result.website:
+            analysis_data = analyze_website(result.website)
+
+            # Save or update analysis
+            if existing:
+                existing.mobile_friendly = analysis_data['mobile_friendly']
+                existing.load_time = analysis_data['load_time']
+                existing.professional_look = analysis_data['professional_look']
+                existing.issues = ', '.join(analysis_data['issues'])
+                existing.score = analysis_data['score']
+                existing.last_analyzed = datetime.utcnow()  # Use utcnow() instead of now()
+            else:
+                analysis = WebsiteAnalysis(
+                    result_id=result.id,
+                    mobile_friendly=analysis_data['mobile_friendly'],
+                    load_time=analysis_data['load_time'],
+                    professional_look=analysis_data['professional_look'],
+                    issues=', '.join(analysis_data['issues']),
+                    score=analysis_data['score'],
+                    last_analyzed=datetime.utcnow()  # Use utcnow() here
+                )
+                db.session.add(analysis)
+
+    db.session.commit()
+    flash('Analysis completed successfully!', 'success')
+    return redirect(url_for('website_analysis'))
+
+@app.route('/export_analysis', methods=['GET'])
+def export_analysis():
+    filter_type = request.args.get('filter', 'all')
+
+    # Base query
+    query = db.session.query(SearchResult, WebsiteAnalysis).outerjoin(
+        WebsiteAnalysis, SearchResult.id == WebsiteAnalysis.result_id)
+
+    # Apply filters
+    if filter_type == 'no_website':
+        query = query.filter(SearchResult.website.is_(None))
+    elif filter_type == 'bad_website':
+        query = query.filter(WebsiteAnalysis.score < 50)
+
+    results = query.all()
+
+    # Prepare data for export
+    data = []
+    for result, analysis in results:
+        row = {
+            'ID': result.id,
+            'Business Name': result.title,
+            'Website': result.website if result.website else 'No website',
+            'Mobile Friendly': 'Yes' if analysis and analysis.mobile_friendly else 'No',
+            'Load Time (s)': analysis.load_time if analysis else 'N/A',
+            'Professional Look': 'Yes' if analysis and analysis.professional_look else 'No',
+            'Score': analysis.score if analysis else 0,
+            'Last Analyzed': analysis.last_analyzed.strftime(
+                '%Y-%m-%d %H:%M') if analysis and analysis.last_analyzed else 'Never',
+            'Issues': analysis.issues if analysis else 'Not analyzed'
+        }
+        data.append(row)
+
+    df = pd.DataFrame(data)
+    filename = f"website_analysis_{filter_type}.xlsx"
+    df.to_excel(filename, index=False)
+
+    return send_file(filename, as_attachment=True)
+
+
+
+
+def process_pending_analyses():
+    with app.app_context():
+        pending_analyses = WebsiteAnalysis.query.filter_by(status='pending').all()
+
+        for analysis in pending_analyses:
+            try:
+                analysis.status = 'running'
+                db.session.commit()
+
+                # Get the website URL from search results
+                result = SearchResult.query.filter_by(keyword_id=analysis.keyword_id).first()
+
+                if result and result.website:
+                    # Perform analysis (same as before but store in database)
+                    analysis_result = analyze_website(result.website)
+
+                    analysis.mobile_friendly = analysis_result['mobile_friendly']
+                    analysis.load_time = analysis_result['load_time']
+                    analysis.professional_look = analysis_result['professional_look']
+                    analysis.issues = ', '.join(analysis_result['issues'])
+                    analysis.score = analysis_result['score']
+                    analysis.status = 'completed'
+                else:
+                    analysis.issues = 'No website found'
+                    analysis.status = 'failed'
+
+                analysis.completed_at = datetime.utcnow()
+                analysis.keyword.last_analyzed = datetime.utcnow()
+                db.session.commit()
+
+            except Exception as e:
+                analysis.status = 'failed'
+                analysis.issues = f'Error: {str(e)}'
+                db.session.commit()
+
+
+@app.route('/delete_analyses', methods=['POST'])
+def delete_analyses():
+    analysis_ids = request.form.getlist('analysis_ids')
+
+    if not analysis_ids:
+        flash('No analyses selected', 'error')
+        return redirect(url_for('website_analysis'))
+
+    # Delete selected analyses
+    WebsiteAnalysis.query.filter(WebsiteAnalysis.id.in_(analysis_ids)).delete()
+    db.session.commit()
+
+    flash(f'Deleted {len(analysis_ids)} analyses', 'success')
+    return redirect(url_for('website_analysis'))
+
 
 
 # Add this new route for website quality analysis
 @app.route('/analyze_websites', methods=['GET', 'POST'])
 def analyze_websites():
-    # Get filter parameters
-    filter_type = request.args.get('filter', 'all')
+    # Handle bulk actions
+    if request.method == 'POST' and 'bulk_action' in request.form:
+        selected_ids = request.form.getlist('selected_ids')
+        if selected_ids:
+            if request.form['bulk_action'] == 'delete':
+                WebsiteAnalysis.query.filter(WebsiteAnalysis.id.in_(selected_ids)).delete()
+                db.session.commit()
+                flash(f'{len(selected_ids)} analyses deleted', 'success')
+            elif request.form['bulk_action'] == 'refresh':
+                for analysis_id in selected_ids:
+                    analysis = WebsiteAnalysis.query.get(analysis_id)
+                    if analysis:
+                        analyze_and_save_website(analysis.result_id, analysis.result.website)
+                flash(f'{len(selected_ids)} analyses refreshed', 'success')
 
-    # Get all results with websites
-    query = SearchResult.query.filter(SearchResult.website.isnot(None))
+    # Get filters and search
+    filter_type = request.args.get('filter', 'all')
+    search_query = request.args.get('search', '')
+    refresh_all = request.args.get('refresh_all', False)
+
+    # Base query
+    query = db.session.query(WebsiteAnalysis, SearchResult).join(SearchResult)
+
+    # Apply search
+    if search_query:
+        query = query.filter(
+            SearchResult.title.ilike(f'%{search_query}%') |
+            SearchResult.website.ilike(f'%{search_query}%')
+        )
 
     # Apply filters
     if filter_type == 'no_website':
-        query = SearchResult.query.filter(SearchResult.website.is_(None))
+        query = query.filter(SearchResult.website.is_(None))
     elif filter_type == 'bad_website':
-        # This will be handled after analysis
-        pass
+        query = query.filter(WebsiteAnalysis.score < 50)
+    elif filter_type == 'good_website':
+        query = query.filter(WebsiteAnalysis.score >= 70)
 
-    results = query.all()
+    # Handle refresh all
+    if refresh_all:
+        results_to_refresh = query.all()
+        for analysis, result in results_to_refresh:
+            if result.website:
+                analyze_and_save_website(result.id, result.website)
+        flash(f'{len(results_to_refresh)} websites re-analyzed', 'success')
 
-    # Analyze websites
-    analyzed_results = []
-    for result in results:
-        analysis = {}
-        if result.website:
-            analysis = analyze_website(result.website)
-        else:
-            analysis = {
-                'mobile_friendly': False,
-                'load_time': None,
-                'professional_look': False,
-                'issues': ['No website'],
-                'score': 0
-            }
+    # Get paginated results
+    page = request.args.get('page', 1, type=int)
+    per_page = 25
+    results = query.order_by(WebsiteAnalysis.last_analyzed.desc()).paginate(page=page, per_page=per_page)
 
-        analyzed_results.append({
-            'id': result.id,
-            'title': result.title,
-            'website': result.website,
-            'analysis': analysis
-        })
-
-    # Apply bad website filter if selected
-    if filter_type == 'bad_website':
-        analyzed_results = [r for r in analyzed_results if r['analysis']['score'] < 50]
-
-    # Handle Excel export
+    # Export to Excel
     if 'export' in request.args:
-        df = pd.DataFrame([{
-            'ID': r['id'],
-            'Title': r['title'],
-            'Website': r['website'],
-            'Mobile Friendly': 'Yes' if r['analysis']['mobile_friendly'] else 'No',
-            'Load Time (s)': r['analysis']['load_time'],
-            'Professional Look': 'Yes' if r['analysis']['professional_look'] else 'No',
-            'Issues': ', '.join(r['analysis']['issues']),
-            'Score': r['analysis']['score']
-        } for r in analyzed_results])
+        data = []
+        for analysis, result in results.items:
+            data.append({
+                'ID': result.id,
+                'Title': result.title,
+                'Website': result.website,
+                'Mobile Friendly': 'Yes' if analysis.mobile_friendly else 'No',
+                'Load Time (s)': analysis.load_time,
+                'Professional': 'Yes' if analysis.professional_look else 'No',
+                'Issues': analysis.issues.replace('|', ', '),
+                'Score': analysis.score,
+                'Last Analyzed': analysis.last_analyzed.strftime('%Y-%m-%d %H:%M')
+            })
 
+        df = pd.DataFrame(data)
         filename = f"website_analysis_{filter_type}.xlsx"
         df.to_excel(filename, index=False)
         return send_file(filename, as_attachment=True)
 
     return render_template('analyze_websites.html',
-                           results=analyzed_results,
-                           filter_type=filter_type)
-
+                           results=results,
+                           filter_type=filter_type,
+                           search_query=search_query)
 
 # Add to your existing imports if not already present
 from io import BytesIO

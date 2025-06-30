@@ -1,0 +1,302 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="container">
+    <div class="card mb-4">
+        <div class="card-header bg-primary text-white d-flex justify-content-between align-items-center">
+            <h4><i class="bi bi-speedometer2"></i> Website Quality Analysis</h4>
+            <div>
+                <a href="{{ url_for('export_analysis', filter=filter_type, date_filter=date_filter) }}" class="btn btn-light btn-sm me-2">
+                    <i class="bi bi-download"></i> Export
+                </a>
+                <a href="{{ url_for('website_analysis', refresh_all=1, filter=filter_type, date_filter=date_filter) }}"
+                   class="btn btn-warning btn-sm" onclick="return confirm('Refresh all current results?')">
+                    <i class="bi bi-arrow-repeat"></i> Refresh All
+                </a>
+            </div>
+        </div>
+
+        <div class="card-body">
+            <!-- Combined Filter Bar -->
+            <form method="GET" class="mb-4">
+                <div class="row g-2 align-items-end">
+                    <div class="col-md-3">
+                        <label class="form-label">Search</label>
+                        <input type="text" name="search" class="form-control"
+                               value="{{ search_query }}" placeholder="Business or website">
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Status</label>
+                        <select name="filter" class="form-select">
+                            <option value="all" {% if filter_type=='all' %}selected{% endif %}>All</option>
+                            <option value="no_website" {% if filter_type=='no_website' %}selected{% endif %}>No Website</option>
+                            <option value="bad_website" {% if filter_type=='bad_website' %}selected{% endif %}>Bad (<50)</option>
+                            <option value="good_website" {% if filter_type=='good_website' %}selected{% endif %}>Good (≥70)</option>
+                            <option value="not_run" {% if filter_type=='not_run' %}selected{% endif %}>Not Analyzed</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Date Filter</label>
+                        <select name="date_filter" class="form-select">
+                            <option value="all" {% if date_filter=='all' %}selected{% endif %}>All Dates</option>
+                            <option value="today" {% if date_filter=='today' %}selected{% endif %}>Today</option>
+                            <option value="week" {% if date_filter=='week' %}selected{% endif %}>This Week</option>
+                            <option value="month" {% if date_filter=='month' %}selected{% endif %}>This Month</option>
+                            <option value="new" {% if date_filter=='new' %}selected{% endif %}>New (Not Run)</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <label class="form-label">Items per page</label>
+                        <select name="per_page" class="form-select" onchange="this.form.submit()">
+                            <option value="10" {% if results.per_page == 10 %}selected{% endif %}>10</option>
+                            <option value="20" {% if results.per_page == 20 %}selected{% endif %}>20</option>
+                            <option value="50" {% if results.per_page == 50 %}selected{% endif %}>50</option>
+                            <option value="100" {% if results.per_page == 100 %}selected{% endif %}>100</option>
+                        </select>
+                    </div>
+                    <div class="col-md-2">
+                        <button type="submit" class="btn btn-primary w-100">
+                            <i class="bi bi-funnel"></i> Apply
+                        </button>
+                    </div>
+                </div>
+            </form>
+
+            <!-- Analysis Form -->
+            <form method="POST" action="{{ url_for('run_analysis') }}">
+                <div class="d-flex justify-content-between mb-3">
+                    <div>
+                        <button type="submit" class="btn btn-success me-2">
+                            <i class="bi bi-play-circle"></i> Analyze Selected
+                        </button>
+                        <div class="form-check form-check-inline">
+                            <input class="form-check-input" type="checkbox" id="force_reanalyze" name="force_reanalyze">
+                            <label class="form-check-label" for="force_reanalyze">Force Re-analysis</label>
+                        </div>
+                    </div>
+                    <div>
+                        <button type="button" class="btn btn-outline-secondary me-2" onclick="toggleSelectAll()">
+                            <i class="bi bi-check-all"></i> Toggle All
+                        </button>
+                        <span class="text-muted">
+                            Showing {{ results.items|length }} of {{ results.total }} results
+                        </span>
+                    </div>
+                </div>
+
+                <!-- Results Table with Issues Column -->
+                <div class="table-responsive">
+                    <table class="table table-hover table-striped">
+                        <thead class="table-light">
+                            <tr>
+                                <th width="40"><input type="checkbox" id="select_all"></th>
+                                <th>Business</th>
+                                <th>Website</th>
+                                <th class="text-center">Mobile</th>
+                                <th class="text-center">Load Time</th>
+                                <th class="text-center">Professional</th>
+                                <th>Score</th>
+                                <th>Last Checked</th>
+                                <th>Issues</th>
+                                <th>Actions</th>
+                            </tr>
+                        </thead>
+                        <tbody>
+                            {% for result, analysis in results.items %}
+                            <tr class="{% if analysis and analysis.score < 50 %}table-danger{% elif analysis and analysis.score < 70 %}table-warning{% endif %}">
+                                <td><input type="checkbox" name="result_ids" value="{{ result.id }}"></td>
+                                <td>{{ result.title }}</td>
+                                <td>
+                                    {% if result.website %}
+                                        <a href="{{ result.website }}" target="_blank">{{ result.website|truncate(30) }}</a>
+                                    {% else %}
+                                        <span class="text-muted">None</span>
+                                    {% endif %}
+                                </td>
+                                <td class="text-center">
+                                    {% if analysis %}
+                                        <span class="badge bg-{% if analysis.mobile_friendly %}success{% else %}danger{% endif %}">
+                                            {% if analysis.mobile_friendly %}Yes{% else %}No{% endif %}
+                                        </span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">N/A</span>
+                                    {% endif %}
+                                </td>
+                                <td class="text-center">
+                                    {% if analysis and analysis.load_time %}
+                                        <span class="badge bg-{% if analysis.load_time < 3 %}success{% else %}warning text-dark{% endif %}">
+                                            {{ analysis.load_time }}s
+                                        </span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">N/A</span>
+                                    {% endif %}
+                                </td>
+                                <td class="text-center">
+                                    {% if analysis %}
+                                        <span class="badge bg-{% if analysis.professional_look %}success{% else %}danger{% endif %}">
+                                            {% if analysis.professional_look %}Yes{% else %}No{% endif %}
+                                        </span>
+                                    {% else %}
+                                        <span class="badge bg-secondary">N/A</span>
+                                    {% endif %}
+                                </td>
+                                <td style="min-width: 120px;">
+                                    {% if analysis %}
+                                        <div class="progress" style="height: 20px;">
+                                            <div class="progress-bar
+                                                {% if analysis.score >= 70 %}bg-success
+                                                {% elif analysis.score >= 40 %}bg-warning
+                                                {% else %}bg-danger{% endif %}"
+                                                style="width: {{ analysis.score }}%">
+                                                {{ analysis.score }}
+                                            </div>
+                                        </div>
+                                    {% else %}
+                                        <span class="text-muted">N/A</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if analysis and analysis.last_analyzed %}
+                                        {{ analysis.last_analyzed.strftime('%Y-%m-%d %H:%M') }}
+                                    {% else %}
+                                        <span class="text-muted">Never</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    {% if analysis %}
+                                        <div style="max-width: 200px; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;">
+                                            {{ analysis.issues or 'No issues' }}
+                                        </div>
+                                    {% else %}
+                                        <span class="text-muted">Not analyzed</span>
+                                    {% endif %}
+                                </td>
+                                <td>
+                                    <button type="button" class="btn btn-sm btn-outline-primary"
+                                            onclick="analyzeSingle('{{ result.id }}')">
+                                        <i class="bi bi-arrow-repeat"></i>
+                                    </button>
+                                </td>
+                            </tr>
+                            {% else %}
+                            <tr>
+                                <td colspan="10" class="text-center text-muted py-4">
+                                    No results found. {% if filter_type != 'all' %}Try changing your filters.{% endif %}
+                                </td>
+                            </tr>
+                            {% endfor %}
+                        </tbody>
+                    </table>
+                </div>
+
+                <!-- Pagination with Items Per Page -->
+                <nav aria-label="Page navigation" class="mt-3">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <form method="GET" class="form-inline">
+                                <input type="hidden" name="filter" value="{{ filter_type }}">
+                                <input type="hidden" name="date_filter" value="{{ date_filter }}">
+                                <input type="hidden" name="search" value="{{ search_query }}">
+                                <div class="input-group">
+                                    <span class="input-group-text">Items per page:</span>
+                                    <select name="per_page" class="form-select" onchange="this.form.submit()">
+                                        <option value="10" {% if results.per_page == 10 %}selected{% endif %}>10</option>
+                                        <option value="20" {% if results.per_page == 20 %}selected{% endif %}>20</option>
+                                        <option value="50" {% if results.per_page == 50 %}selected{% endif %}>50</option>
+                                        <option value="100" {% if results.per_page == 100 %}selected{% endif %}>100</option>
+                                    </select>
+                                </div>
+                            </form>
+                        </div>
+                        <div class="col-md-6">
+                            <ul class="pagination justify-content-end">
+                                {% if results.has_prev %}
+                                <li class="page-item">
+                                    <a class="page-link" href="{{ url_for('website_analysis',
+                                        page=results.prev_num,
+                                        filter=filter_type,
+                                        date_filter=date_filter,
+                                        search=search_query,
+                                        per_page=results.per_page) }}">
+                                        Previous
+                                    </a>
+                                </li>
+                                {% else %}
+                                <li class="page-item disabled">
+                                    <span class="page-link">Previous</span>
+                                </li>
+                                {% endif %}
+
+                                {% for page_num in results.iter_pages(left_edge=1, right_edge=1, left_current=2, right_current=2) %}
+                                    {% if page_num %}
+                                        {% if results.page == page_num %}
+                                        <li class="page-item active">
+                                            <span class="page-link">{{ page_num }}</span>
+                                        </li>
+                                        {% else %}
+                                        <li class="page-item">
+                                            <a class="page-link" href="{{ url_for('website_analysis',
+                                                page=page_num,
+                                                filter=filter_type,
+                                                date_filter=date_filter,
+                                                search=search_query,
+                                                per_page=results.per_page) }}">
+                                                {{ page_num }}
+                                            </a>
+                                        </li>
+                                        {% endif %}
+                                    {% else %}
+                                        <li class="page-item disabled">
+                                            <span class="page-link">...</span>
+                                        </li>
+                                    {% endif %}
+                                {% endfor %}
+
+                                {% if results.has_next %}
+                                <li class="page-item">
+                                    <a class="page-link" href="{{ url_for('website_analysis',
+                                        page=results.next_num,
+                                        filter=filter_type,
+                                        date_filter=date_filter,
+                                        search=search_query,
+                                        per_page=results.per_page) }}">
+                                        Next
+                                    </a>
+                                </li>
+                                {% else %}
+                                <li class="page-item disabled">
+                                    <span class="page-link">Next</span>
+                                </li>
+                                {% endif %}
+                            </ul>
+                        </div>
+                    </div>
+                </nav>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+    function toggleSelectAll() {
+        const checkboxes = document.querySelectorAll('input[name="result_ids"]');
+        const selectAll = document.getElementById('select_all');
+        checkboxes.forEach(checkbox => {
+            checkbox.checked = selectAll.checked;
+        });
+    }
+
+    function analyzeSingle(resultId) {
+        const form = document.createElement('form');
+        form.method = 'POST';
+        form.action = "{{ url_for('run_analysis') }}";
+        const input = document.createElement('input');
+        input.type = 'hidden';
+        input.name = 'result_ids';
+        input.value = resultId;
+        form.appendChild(input);
+        document.body.appendChild(form);
+        form.submit();
+    }
+</script>
+{% endblock %}
